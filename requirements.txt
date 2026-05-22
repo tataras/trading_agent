@@ -1,0 +1,25 @@
+# Zależności agenta handlowego
+# Instalacja: pip install -r requirements.txt
+
+# Komunikacja z Gemini API
+google-genai>=1.0.0
+
+# Obliczenia numeryczne i wskaźniki techniczne
+pandas>=2.0.0
+
+# Zapytania HTTP (pobieranie danych z Binance)
+requests>=2.31.0
+
+# ─── Opcjonalne (przyszłe rozszerzenia) ──────────────────────────
+
+# ccxt — unified API dla 100+ giełd (krypto + futures)
+# Użyj gdy chcesz podłączyć Binance Testnet, Bybit, OKX itp.
+# pip install ccxt
+
+# oandapyV20 — oficjalny klient OANDA dla forex
+# Użyj gdy chcesz konto practice OANDA
+# pip install oandapyV20
+
+# python-dotenv — ładowanie .env pliku
+# Wygodne do zarządzania kluczami API
+# pip install python-dotenv
