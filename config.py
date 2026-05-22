@@ -36,6 +36,12 @@ class Config:
     timeframe: str = "1m"       # interwał świec: 1m, 5m, 15m, 1h, 4h, 1d
     candle_limit: int = 50      # ile ostatnich świec wysyłamy do analizy
 
+    # Zrodlo danych rynkowych
+    # "binance" - publiczne REST API Binance z fallbackiem do demo
+    # "demo"    - lokalny generator danych, bez internetu/API
+    market_data_source: str = os.getenv("MARKET_DATA_SOURCE", "binance").lower()
+    binance_base_url: str = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
+
     # ─── Pętla agenta ─────────────────────────────────────────────
     # Jak często agent podejmuje decyzję (w sekundach).
     # 300 = co 5 minut. Dla timeframe=1h sensowne jest 3600.

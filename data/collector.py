@@ -53,11 +53,22 @@ class MarketDataCollector:
 
     def __init__(self, config):
         self.cfg = config
+        self.base_url = config.binance_base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
 
     def fetch(self) -> MarketSnapshot:
         """Pobierz dane — z API lub z generatora demo."""
+        source = self.cfg.market_data_source
+
+        if source == "demo":
+            return self._generate_demo_snapshot()
+
+        if source != "binance":
+            raise ValueError(
+                f"Nieznane MARKET_DATA_SOURCE='{source}'. Dozwolone: binance, demo."
+            )
+
         try:
             return self._fetch_live()
         except Exception as e:
@@ -136,7 +147,7 @@ class MarketDataCollector:
         Pobiera świece OHLCV.
         Każda świeca = jeden interwał czasowy (np. 1h).
         """
-        url = f"{self.BASE_URL}/api/v3/klines"
+        url = f"{self.base_url}/api/v3/klines"
         params = {
             "symbol": self.cfg.symbol,
             "interval": self.cfg.timeframe,
@@ -161,7 +172,7 @@ class MarketDataCollector:
 
     def _fetch_ticker(self) -> dict:
         """Pobiera statystyki 24h (zmiana ceny, wolumen)."""
-        url = f"{self.BASE_URL}/api/v3/ticker/24hr"
+        url = f"{self.base_url}/api/v3/ticker/24hr"
         resp = self.session.get(url, params={"symbol": self.cfg.symbol}, timeout=10)
         resp.raise_for_status()
         return resp.json()

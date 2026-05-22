@@ -129,6 +129,7 @@ def main():
     log.info("=" * 60)
     log.info("🤖 AGENT HANDLOWY AI — START")
     log.info(f"   Symbol:   {cfg.symbol}")
+    log.info(f"   Dane:     {cfg.market_data_source}")
     log.info(f"   Broker:   {cfg.broker_mode}")
     log.info(f"   Model:    {cfg.gemini_model}")
     log.info(f"   Interwał: {cfg.interval_seconds}s")

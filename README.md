@@ -45,6 +45,9 @@ cp .env.example .env
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.5-flash
 
+MARKET_DATA_SOURCE=binance
+BINANCE_BASE_URL=https://api.binance.com
+
 BROKER_MODE=alpaca_paper
 ALPACA_API_KEY=...
 ALPACA_SECRET_KEY=...
@@ -75,6 +78,7 @@ Binance API
 | Parametr | Domyslnie | Opis |
 | --- | --- | --- |
 | `symbol` | `BTCUSDT` | Symbol dla danych Binance |
+| `market_data_source` | `binance` | Zrodlo danych: `binance` albo `demo` |
 | `alpaca_symbol` | auto / `BTC/USD` | Symbol dla Alpaca |
 | `timeframe` | `1h` | Interwal swiec |
 | `interval_seconds` | `60` | Czas miedzy cyklami |
@@ -90,6 +94,14 @@ Aby wrocic do lokalnego paper tradingu bez Alpaca:
 
 ```env
 BROKER_MODE=mock
+```
+
+## Dane Demo
+
+Aby uzyc lokalnie generowanych danych zamiast Binance:
+
+```env
+MARKET_DATA_SOURCE=demo
 ```
 
 ## Ostrzezenie
