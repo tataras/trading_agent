@@ -21,13 +21,19 @@ from agent.gemini_client import GeminiClient
 from agent.response_parser import ResponseParser
 from risk.manager import RiskManager
 from broker.alpaca_broker import AlpacaPaperBroker
+from broker.exante_broker import ExanteDemoBroker
 from broker.mock_broker import MockBroker
+from broker.oanda_broker import OandaPracticeBroker
 
 
 def create_broker(cfg: Config):
     """Utworz brokera zgodnie z konfiguracja."""
     if cfg.broker_mode == "alpaca_paper":
         return AlpacaPaperBroker(cfg)
+    if cfg.broker_mode == "oanda_demo":
+        return OandaPracticeBroker(cfg)
+    if cfg.broker_mode == "exante_demo":
+        return ExanteDemoBroker(cfg)
     if cfg.broker_mode == "mock":
         return MockBroker(cfg)
     raise ValueError(f"Nieznany broker_mode: {cfg.broker_mode}")

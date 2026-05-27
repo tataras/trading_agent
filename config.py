@@ -1,6 +1,8 @@
 """
-config.py — Centralna konfiguracja agenta
-Wszystkie parametry systemu w jednym miejscu. Zmień tutaj, nie w kodzie.
+Central configuration for the trading agent.
+
+Values are loaded from environment variables and, if present, from a local
+.env file. Real credentials should stay in .env and never be committed.
 """
 
 import os
@@ -8,7 +10,7 @@ from dataclasses import dataclass
 
 
 def _load_dotenv(path: str = ".env") -> None:
-    """Minimalny loader .env bez dodatkowych zaleznosci."""
+    """Minimal .env loader without extra dependencies."""
     if not os.path.exists(path):
         return
 
@@ -21,6 +23,20 @@ def _load_dotenv(path: str = ".env") -> None:
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def _get_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _get_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 _load_dotenv()
 
 
@@ -28,40 +44,31 @@ _load_dotenv()
 class Config:
     # Gemini API
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-    # ─── Instrument ───────────────────────────────────────────────
-    # Format dla krypto: "BTCUSDT", dla forex: "EUR/USD"
-    symbol: str = "BTCUSDT"
-    timeframe: str = "1m"       # interwał świec: 1m, 5m, 15m, 1h, 4h, 1d
-    candle_limit: int = 50      # ile ostatnich świec wysyłamy do analizy
+    # Instrument
+    symbol: str = os.getenv("SYMBOL", "BTCUSDT")
+    timeframe: str = os.getenv("TIMEFRAME", "1m")
+    candle_limit: int = _get_int("CANDLE_LIMIT", 50)
 
-    # Zrodlo danych rynkowych
-    # "binance" - publiczne REST API Binance z fallbackiem do demo
-    # "demo"    - lokalny generator danych, bez internetu/API
-    market_data_source: str = os.getenv("MARKET_DATA_SOURCE", "binance").lower()
+    # Market data source: binance, oanda, exante, demo
+    market_data_source: str = os.getenv("MARKET_DATA_SOURCE", "exante").lower()
     binance_base_url: str = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
 
-    # ─── Pętla agenta ─────────────────────────────────────────────
-    # Jak często agent podejmuje decyzję (w sekundach).
-    # 300 = co 5 minut. Dla timeframe=1h sensowne jest 3600.
-    interval_seconds: int = 60  # krótki interwał na potrzeby testów
+    # Agent loop
+    interval_seconds: int = _get_int("INTERVAL_SECONDS", 60)
 
-    # ─── Zarządzanie ryzykiem ──────────────────────────────────────
-    max_position_pct: float = 0.05    # max 5% kapitału na jedną pozycję
-    stop_loss_pct: float = 0.02       # stop-loss: zamknij gdy strata > 2%
-    max_daily_loss_pct: float = 0.06  # wyłącz agenta gdy dzienna strata > 6%
-    max_open_positions: int = 3       # max 3 otwarte pozycje jednocześnie
+    # Risk management
+    max_position_pct: float = _get_float("MAX_POSITION_PCT", 0.05)
+    stop_loss_pct: float = _get_float("STOP_LOSS_PCT", 0.02)
+    max_daily_loss_pct: float = _get_float("MAX_DAILY_LOSS_PCT", 0.06)
+    max_open_positions: int = _get_int("MAX_OPEN_POSITIONS", 3)
 
-    # ─── Portfolio startowe ───────────────────────────────────────
-    initial_capital_usd: float = 100_000.0
+    # Starting portfolio for mock mode and fallbacks
+    initial_capital_usd: float = _get_float("INITIAL_CAPITAL_USD", 100_000.0)
 
-    # ─── Tryb brokera ─────────────────────────────────────────────
-    # "mock"             — czysta symulacja w pamięci
-    # "alpaca_paper"     — Alpaca Paper Trading (wymaga kluczy Alpaca)
-    # "binance_testnet"  — Binance Testnet (wymaga kluczy testowych)
-    # "oanda_demo"       — OANDA konto practice (wymaga kluczy)
-    broker_mode: str = os.getenv("BROKER_MODE", "alpaca_paper")
+    # Broker mode: mock, alpaca_paper, oanda_demo, exante_demo
+    broker_mode: str = os.getenv("BROKER_MODE", "exante_demo")
 
     # Alpaca Paper Trading
     alpaca_api_key: str = os.getenv("ALPACA_API_KEY", os.getenv("APCA_API_KEY_ID", ""))
@@ -75,10 +82,35 @@ class Config:
     )
     alpaca_symbol: str = os.getenv("ALPACA_SYMBOL", "")
     alpaca_time_in_force: str = os.getenv("ALPACA_TIME_IN_FORCE", "gtc")
-    alpaca_min_order_notional: float = float(
-        os.getenv("ALPACA_MIN_ORDER_NOTIONAL", "10")
-    )
+    alpaca_min_order_notional: float = _get_float("ALPACA_MIN_ORDER_NOTIONAL", 10.0)
 
-    # ─── Logowanie ────────────────────────────────────────────────
-    log_level: str = "INFO"
-    log_file: str = "agent.log"   # "" = tylko konsola
+    # OANDA Practice / Demo
+    oanda_account_id: str = os.getenv("OANDA_ACCOUNT_ID", "")
+    oanda_access_token: str = os.getenv("OANDA_ACCESS_TOKEN", "")
+    oanda_base_url: str = os.getenv(
+        "OANDA_BASE_URL",
+        "https://api-fxpractice.oanda.com",
+    )
+    oanda_instrument: str = os.getenv("OANDA_INSTRUMENT", "")
+    oanda_min_order_units: int = _get_int("OANDA_MIN_ORDER_UNITS", 1)
+
+    # EXANTE HTTP API Demo
+    exante_application_id: str = os.getenv("EXANTE_APPLICATION_ID", "")
+    exante_access_key: str = os.getenv("EXANTE_ACCESS_KEY", "")
+    exante_account_id: str = os.getenv("EXANTE_ACCOUNT_ID", "")
+    exante_trade_base_url: str = os.getenv(
+        "EXANTE_TRADE_BASE_URL",
+        "https://api-demo.exante.eu/trade",
+    )
+    exante_md_base_url: str = os.getenv(
+        "EXANTE_MD_BASE_URL",
+        "https://api-demo.exante.eu/md",
+    )
+    exante_symbol: str = os.getenv("EXANTE_SYMBOL", "AAPL.NASDAQ")
+    exante_summary_currency: str = os.getenv("EXANTE_SUMMARY_CURRENCY", "EUR")
+    exante_order_duration: str = os.getenv("EXANTE_ORDER_DURATION", "day")
+    exante_min_order_quantity: float = _get_float("EXANTE_MIN_ORDER_QUANTITY", 1.0)
+
+    # Logging
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    log_file: str = os.getenv("LOG_FILE", "agent.log")

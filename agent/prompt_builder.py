@@ -1,127 +1,118 @@
 """
-agent/prompt_builder.py — Warstwa 2: Budowanie promptu
+Build prompts for the trading decision model.
 
-To jest kluczowy plik z perspektywy jakości decyzji agenta.
-Im lepszy prompt, tym lepsze decyzje modelu.
-
-Prompt składa się z dwóch części:
-  SYSTEM PROMPT — definiuje rolę i reguły, wysyłany RAZ (lub rzadko)
-  USER MESSAGE  — aktualna sytuacja rynkowa, wysyłany przy każdej decyzji
+The prompt is intentionally broker-agnostic, so the same agent can analyze
+crypto data from Binance or forex data from OANDA.
 """
 
-import json
 from data.collector import MarketSnapshot
 
 
-SYSTEM_PROMPT = """Jesteś precyzyjnym asystentem handlowym analizującym rynek kryptowalut.
-Twoje zadanie: na podstawie danych rynkowych podjąć jedną z trzech decyzji:
+SYSTEM_PROMPT = """Jestes precyzyjnym asystentem handlowym analizujacym instrument finansowy.
+Twoje zadanie: na podstawie dostarczonych danych rynkowych podjac jedna z trzech decyzji:
 BUY, SELL lub HOLD.
 
-ZASADY DZIAŁANIA:
-1. Analizuj TYLKO dostarczone dane — nie spekuluj na podstawie wiedzy spoza promptu.
-2. Bądź konserwatywny — w przypadku wątpliwości wybieraj HOLD.
-3. RSI > 75 to silny sygnał wykupienia (rozważ SELL lub HOLD).
-4. RSI < 25 to silny sygnał wyprzedania (rozważ BUY lub HOLD).
-5. Uwzględniaj trend (bullish/bearish/sideways) — nie handluj przeciwko silnemu trendowi.
-6. Wysoki volume_ratio (>2) potwierdza sygnał. Niski (<0.5) osłabia.
-7. Jeśli masz już otwartą pozycję, nie otwieraj kolejnej w tym samym kierunku.
+ZASADY DZIALANIA:
+1. Analizuj TYLKO dostarczone dane - nie spekuluj na podstawie wiedzy spoza promptu.
+2. Badz konserwatywny - w przypadku watpliwosci wybieraj HOLD.
+3. RSI > 75 to silny sygnal wykupienia (rozwaz SELL lub HOLD).
+4. RSI < 25 to silny sygnal wyprzedania (rozwaz BUY lub HOLD).
+5. Uwzgledniaj trend (bullish/bearish/sideways) - nie handluj przeciwko silnemu trendowi.
+6. Wysoki volume_ratio (>2) potwierdza sygnal. Niski (<0.5) oslabia.
+7. Jesli masz juz otwarta pozycje, nie otwieraj kolejnej w tym samym kierunku.
+8. SELL oznacza zamkniecie istniejacej pozycji long, a nie otwieranie shorta.
 
-FORMAT ODPOWIEDZI — zwróć WYŁĄCZNIE poprawny JSON, bez żadnego tekstu przed ani po:
+FORMAT ODPOWIEDZI - zwroc WYLACZNIE poprawny JSON, bez tekstu przed ani po:
 {
   "action": "BUY" | "SELL" | "HOLD",
   "confidence": 0-100,
-  "reasoning": "Zwięzłe uzasadnienie max 3 zdania.",
-  "key_signals": ["sygnał 1", "sygnał 2", "sygnał 3"],
-  "risk_note": "Co może pójść nie tak z tą decyzją."
+  "reasoning": "Zwiezle uzasadnienie max 3 zdania.",
+  "key_signals": ["sygnal 1", "sygnal 2", "sygnal 3"],
+  "risk_note": "Co moze pojsc nie tak z ta decyzja."
 }
 
-WAŻNE: confidence oznacza pewność co do decyzji (nie prawdopodobieństwo zysku).
-Confidence < 60 powinno skutkować HOLD chyba że sygnały są bardzo jednoznaczne."""
+WAZNE: confidence oznacza pewnosc co do decyzji, nie prawdopodobienstwo zysku.
+Confidence < 60 powinno skutkowac HOLD, chyba ze sygnaly sa bardzo jednoznaczne."""
 
 
 class PromptBuilder:
-    """
-    Konwertuje dane rynkowe + stan portfela na prompt dla modelu.
-
-    Dobre praktyki inżynierii promptów zastosowane tutaj:
-    - Dane strukturalne (liczby) są w sekcjach z wyraźnymi nagłówkami
-    - Kontekst portfela pomaga modelowi uwzględnić istniejące pozycje
-    - Wymagany format JSON eliminuje potrzebę parsowania tekstu naturalnego
-    - System prompt definiuje zasady raz, user message dostarcza danych
-    """
+    """Convert market data and portfolio state into a model prompt."""
 
     def __init__(self, config):
         self.cfg = config
 
-    def \
-            build(self, snapshot: MarketSnapshot, portfolio: dict) -> str:
-        """
-        Buduje wiadomość użytkownika z aktualnymi danymi rynkowymi.
-
-        Args:
-            snapshot: dane rynkowe z MarketDataCollector
-            portfolio: stan portfela z MockBroker / brokera
-
-        Returns:
-            Tekst promptu gotowy do wysłania do modelu
-        """
+    def build(self, snapshot: MarketSnapshot, portfolio: dict) -> str:
         open_positions = portfolio.get("open_positions", [])
         current_position = self._find_position(open_positions, snapshot.symbol)
 
         return f"""## AKTUALNA SYTUACJA RYNKOWA
-Instrument: {snapshot.symbol} | Giełda: {snapshot.exchange} | Timeframe: {snapshot.timeframe}
+Instrument: {snapshot.symbol} | Zrodlo: {snapshot.exchange} | Timeframe: {snapshot.timeframe}
 
 ### Cena i zmiana
-- Cena aktualna: ${snapshot.price:,.2f}
+- Cena aktualna: {snapshot.price:,.5f}
+- Zmiana 1h: {snapshot.change_pct_1h:+.2f}%
 - Zmiana 24h: {snapshot.change_pct_24h:+.2f}%
-- Wolumen 24h: ${snapshot.volume_24h:,.0f}
+- Wolumen / tick volume 24h: {snapshot.volume_24h:,.0f}
 
-### Wskaźniki techniczne
-- RSI(14): {snapshot.rsi_14} {'⚠️ WYKUPIONY' if snapshot.rsi_14 > 70 else '⚠️ WYPRZEDANY' if snapshot.rsi_14 < 30 else '(neutralny)'}
-- SMA(20): ${snapshot.sma_20:,.2f} | SMA(50): ${snapshot.sma_50:,.2f}
+### Wskazniki techniczne
+- RSI(14): {snapshot.rsi_14} {self._rsi_label(snapshot.rsi_14)}
+- SMA(20): {snapshot.sma_20:,.5f} | SMA(50): {snapshot.sma_50:,.5f}
 - Trend: {snapshot.trend.upper()}
-- Volume ratio vs. średnia 20: {snapshot.volume_ratio:.2f}x {'(ponadnorma)' if snapshot.volume_ratio > 1.5 else '(normalny)' if snapshot.volume_ratio > 0.7 else '(niski)'}
+- Volume ratio vs. srednia 20: {snapshot.volume_ratio:.2f}x {self._volume_label(snapshot.volume_ratio)}
 
-### Ostatnie 5 świec ({snapshot.timeframe})
+### Ostatnie 5 swiec ({snapshot.timeframe})
 {snapshot.last_candles_summary}
 
 ### Stan portfela
-- Kapitał wolny: ${portfolio.get('free_capital', 0):,.2f}
-- Łączna wartość: ${portfolio.get('total_value', 0):,.2f}
-- Dzienna P&L: {portfolio.get('daily_pnl_pct', 0):+.2f}%
+- Kapital wolny / margin available: {portfolio.get('free_capital', 0):,.2f}
+- Laczna wartosc / NAV: {portfolio.get('total_value', 0):,.2f}
+- P&L: {portfolio.get('daily_pnl_pct', 0):+.2f}%
 - Otwarte pozycje: {len(open_positions)}
 
 ### Aktualna pozycja w {snapshot.symbol}
 {self._format_position(current_position, snapshot.price)}
 
 ---
-Przeanalizuj powyższe dane i zwróć decyzję w wymaganym formacie JSON."""
+Przeanalizuj powyzsze dane i zwroc decyzje w wymaganym formacie JSON."""
 
     def _find_position(self, positions: list, symbol: str) -> dict | None:
-        """Znajdź otwartą pozycję dla danego symbolu."""
         for pos in positions:
             if pos.get("symbol") == symbol:
                 return pos
         return None
 
     def _format_position(self, position: dict | None, current_price: float) -> str:
-        """Opisz aktualną pozycję czytelnie dla modelu."""
         if not position:
             return "Brak otwartej pozycji."
 
         entry = position["entry_price"]
         size = position["size_usd"]
-        pnl = ((current_price - entry) / entry) * 100
+        pnl = ((current_price - entry) / entry) * 100 if entry else 0.0
         direction = position.get("direction", "LONG")
 
         return (
             f"Kierunek: {direction} | "
-            f"Cena wejścia: ${entry:,.2f} | "
-            f"Rozmiar: ${size:,.2f} | "
+            f"Cena wejscia: {entry:,.5f} | "
+            f"Rozmiar: {size:,.2f} | "
             f"Niezrealizowany P&L: {pnl:+.2f}%"
         )
 
     @staticmethod
+    def _rsi_label(rsi: float) -> str:
+        if rsi > 70:
+            return "(wykupiony)"
+        if rsi < 30:
+            return "(wyprzedany)"
+        return "(neutralny)"
+
+    @staticmethod
+    def _volume_label(volume_ratio: float) -> str:
+        if volume_ratio > 1.5:
+            return "(ponadnorma)"
+        if volume_ratio > 0.7:
+            return "(normalny)"
+        return "(niski)"
+
+    @staticmethod
     def get_system_prompt() -> str:
-        """Zwraca system prompt — wywoływany przez klienta LLM."""
         return SYSTEM_PROMPT

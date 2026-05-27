@@ -12,9 +12,11 @@ OHLCV = Open, High, Low, Close, Volume
      Volume— wolumen obrotu
 """
 
-import requests
-import pandas as pd
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+import pandas as pd
+import requests
 
 
 @dataclass
@@ -43,8 +45,8 @@ class MarketSnapshot:
 
 class MarketDataCollector:
     """
-    Pobiera dane z Binance public REST API.
-    Endpoint /api/v3/klines nie wymaga uwierzytelnienia.
+    Pobiera dane z Binance public REST API albo z wybranego demo brokera.
+    Endpoint Binance /api/v3/klines nie wymaga uwierzytelnienia.
 
     Tryb demo: ustaw demo_mode=True w config lub gdy API niedostępne.
     """
@@ -54,6 +56,8 @@ class MarketDataCollector:
     def __init__(self, config):
         self.cfg = config
         self.base_url = config.binance_base_url.rstrip("/")
+        self.oanda_base_url = config.oanda_base_url.rstrip("/")
+        self.exante_md_base_url = config.exante_md_base_url.rstrip("/")
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
 
@@ -64,9 +68,15 @@ class MarketDataCollector:
         if source == "demo":
             return self._generate_demo_snapshot()
 
+        if source == "oanda":
+            return self._fetch_oanda()
+
+        if source == "exante":
+            return self._fetch_exante()
+
         if source != "binance":
             raise ValueError(
-                f"Nieznane MARKET_DATA_SOURCE='{source}'. Dozwolone: binance, demo."
+                f"Nieznane MARKET_DATA_SOURCE='{source}'. Dozwolone: binance, oanda, exante, demo."
             )
 
         try:
@@ -77,6 +87,113 @@ class MarketDataCollector:
                 f"API niedostępne ({e}). Używam trybu demo."
             )
             return self._generate_demo_snapshot()
+
+    def _fetch_oanda(self) -> MarketSnapshot:
+        """Pobierz swiece forex z OANDA practice REST API."""
+        if not self.cfg.oanda_access_token:
+            raise ValueError("Brak OANDA_ACCESS_TOKEN w konfiguracji.")
+
+        instrument = self._to_oanda_instrument(
+            self.cfg.oanda_instrument or self.cfg.symbol
+        )
+        url = f"{self.oanda_base_url}/v3/instruments/{instrument}/candles"
+        params = {
+            "granularity": self._to_oanda_granularity(self.cfg.timeframe),
+            "count": max(self.cfg.candle_limit, 60),
+            "price": "M",
+        }
+        headers = {"Authorization": f"Bearer {self.cfg.oanda_access_token}"}
+        resp = self.session.get(url, params=params, headers=headers, timeout=10)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        rows = []
+        for candle in raw.get("candles", []):
+            if not candle.get("complete", True):
+                continue
+            mid = candle.get("mid", {})
+            rows.append(
+                {
+                    "open_time": pd.to_datetime(candle["time"]),
+                    "open": float(mid["o"]),
+                    "high": float(mid["h"]),
+                    "low": float(mid["l"]),
+                    "close": float(mid["c"]),
+                    "volume": float(candle.get("volume", 0)),
+                }
+            )
+
+        if len(rows) < 20:
+            raise RuntimeError(f"OANDA zwrocila za malo swiec: {len(rows)}")
+
+        df = pd.DataFrame(rows)
+        ticker = {
+            "priceChangePercent": self._compute_period_change_pct(
+                df["close"], self.cfg.timeframe, 24 * 60
+            ),
+            "quoteVolume": float(df["volume"].tail(min(len(df), 24)).sum()),
+        }
+        snapshot = self._build_snapshot(df, ticker)
+        snapshot.symbol = self._from_oanda_instrument(instrument)
+        snapshot.exchange = "OANDA Practice"
+        snapshot.timeframe = self.cfg.timeframe
+        return snapshot
+
+    def _fetch_exante(self) -> MarketSnapshot:
+        """Pobierz swiece OHLC z EXANTE HTTP API demo."""
+        if not self.cfg.exante_application_id or not self.cfg.exante_access_key:
+            raise ValueError(
+                "Brak EXANTE_APPLICATION_ID lub EXANTE_ACCESS_KEY w konfiguracji."
+            )
+
+        symbol = self.cfg.exante_symbol or self.cfg.symbol
+        duration = self._timeframe_to_seconds(self.cfg.timeframe)
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(seconds=duration * max(self.cfg.candle_limit, 60))
+        url = f"{self.exante_md_base_url}/3.0/ohlc/{symbol}/{duration}"
+        params = {
+            "from": int(start.timestamp() * 1000),
+            "to": int(end.timestamp() * 1000),
+            "size": max(self.cfg.candle_limit, 60),
+        }
+        resp = self.session.get(
+            url,
+            params=params,
+            auth=(self.cfg.exante_application_id, self.cfg.exante_access_key),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+        candles = raw.get("candles", raw) if isinstance(raw, dict) else raw
+
+        rows = []
+        for candle in candles:
+            rows.append(
+                {
+                    "open_time": pd.to_datetime(candle["timestamp"], unit="ms"),
+                    "open": float(candle["open"]),
+                    "high": float(candle["high"]),
+                    "low": float(candle["low"]),
+                    "close": float(candle["close"]),
+                    "volume": 1.0,
+                }
+            )
+
+        if len(rows) < 20:
+            raise RuntimeError(f"EXANTE zwrocilo za malo swiec: {len(rows)}")
+
+        df = pd.DataFrame(rows).sort_values("open_time")
+        ticker = {
+            "priceChangePercent": self._compute_period_change_pct(
+                df["close"], self.cfg.timeframe, 24 * 60
+            ),
+            "quoteVolume": 0.0,
+        }
+        snapshot = self._build_snapshot(df, ticker)
+        snapshot.symbol = symbol
+        snapshot.exchange = "EXANTE Demo"
+        snapshot.timeframe = self.cfg.timeframe
+        return snapshot
 
     def _fetch_live(self) -> MarketSnapshot:
         """Pobierz dane na żywo z Binance."""
@@ -186,7 +303,7 @@ class MarketDataCollector:
 
         rsi = self._compute_rsi(closes, period=14).iloc[-1]
         sma_20 = closes.rolling(20).mean().iloc[-1]
-        sma_50 = closes.rolling(50).mean().iloc[-1]
+        sma_50 = closes.rolling(min(50, len(closes))).mean().iloc[-1]
 
         # Trend: cena względem średnich
         current_price = closes.iloc[-1]
@@ -268,6 +385,47 @@ class MarketDataCollector:
             "M": 43200,
         }
         return max(1, value * multipliers.get(unit, 60))
+
+    @staticmethod
+    def _timeframe_to_seconds(timeframe: str) -> int:
+        return MarketDataCollector._timeframe_to_minutes(timeframe) * 60
+
+    @staticmethod
+    def _to_oanda_instrument(symbol: str) -> str:
+        """Konwertuj EUR/USD, EURUSD albo EUR_USD do formatu OANDA."""
+        normalized = symbol.strip().upper().replace("-", "_").replace("/", "_")
+        if "_" in normalized:
+            return normalized
+        if len(normalized) == 6:
+            return f"{normalized[:3]}_{normalized[3:]}"
+        return normalized
+
+    @staticmethod
+    def _from_oanda_instrument(instrument: str) -> str:
+        parts = instrument.upper().split("_", 1)
+        if len(parts) == 2:
+            return f"{parts[0]}/{parts[1]}"
+        return instrument.upper()
+
+    @staticmethod
+    def _to_oanda_granularity(timeframe: str) -> str:
+        mapping = {
+            "1m": "M1",
+            "5m": "M5",
+            "10m": "M10",
+            "15m": "M15",
+            "30m": "M30",
+            "1h": "H1",
+            "2h": "H2",
+            "3h": "H3",
+            "4h": "H4",
+            "6h": "H6",
+            "8h": "H8",
+            "12h": "H12",
+            "1d": "D",
+            "1w": "W",
+        }
+        return mapping.get(timeframe, "H1")
 
     @staticmethod
     def _compute_rsi(closes: pd.Series, period: int = 14) -> pd.Series:

@@ -1,3 +1,6 @@
 .env
 .venv
+.idea/
 agent.log
+__pycache__/
+*.pyc
